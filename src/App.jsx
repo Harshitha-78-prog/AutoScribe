@@ -211,6 +211,7 @@ function richHtmlToWord(html) {
   return output.length ? output : [new Paragraph("No content provided.")];
 }
 
+
 function Login({ onLogin }) {
   const [mode, setMode] = useState("signin");
   const [name, setName] = useState("");
@@ -218,27 +219,27 @@ function Login({ onLogin }) {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  function submit() {
+  async function submit() {
     setMessage("");
-    const normalizedEmail = email.trim().toLowerCase();
 
     if (mode === "guest") {
       const guest = { name: "Student", email: "" };
-      localStorage.setItem("autoscribe-current-user", JSON.stringify(guest));
+      localStorage.setItem(
+        "autoscribe-current-user",
+        JSON.stringify(guest)
+      );
       onLogin(guest);
       return;
     }
+
+    const normalizedEmail = email.trim().toLowerCase();
 
     if (!normalizedEmail || !password) {
       setMessage("Please enter your email address and password.");
       return;
     }
-
-    const users = readStore("autoscribe-users", []);
-    const existing = users.find(
-      u => u.email.trim().toLowerCase() === normalizedEmail
-    );
 
     if (mode === "create") {
       if (!name.trim()) {
@@ -246,8 +247,8 @@ function Login({ onLogin }) {
         return;
       }
 
-      if (password.length < 8) {
-        setMessage("Password must contain at least 8 characters.");
+      if (password.length < 8 || password.length > 72) {
+        setMessage("Password must contain between 8 and 72 characters.");
         return;
       }
 
@@ -255,45 +256,96 @@ function Login({ onLogin }) {
         setMessage("Passwords do not match.");
         return;
       }
+    }
 
-      if (existing) {
-        setMessage("An account with this email already exists. Please sign in.");
-        return;
+    setLoading(true);
+
+    try {
+      const API_URL = (
+        import.meta.env.VITE_API_URL || "http://localhost:5000"
+      ).replace(/\/+$/, "");
+
+      const endpoint =
+        mode === "create"
+          ? "/api/auth/register"
+          : "/api/auth/login";
+
+      const payload =
+        mode === "create"
+          ? {
+              name: name.trim(),
+              email: normalizedEmail,
+              password,
+            }
+          : {
+              email: normalizedEmail,
+              password,
+            };
+
+      const response = await fetch(`${API_URL}${endpoint}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          data.message || "Authentication failed. Please try again."
+        );
       }
 
-      const newUser = {
-        name: name.trim(),
-        email: normalizedEmail,
-        password
+      if (!data.token || !data.user) {
+        throw new Error("The server returned an incomplete response.");
+      }
+
+      const current = {
+        id: data.user.id,
+        name: data.user.name,
+        email: data.user.email,
       };
 
-      try {
-        localStorage.setItem(
-          "autoscribe-users",
-          JSON.stringify([...users, newUser])
+      // Save the token and profile, never the password.
+      localStorage.setItem("autoscribe-token", data.token);
+      localStorage.setItem(
+        "autoscribe-current-user",
+        JSON.stringify(current)
+      );
+
+      onLogin(current);
+    } catch (error) {
+      if (error instanceof TypeError) {
+        setMessage(
+          "Cannot connect to AutoScribe's backend. Make sure the backend is running."
         );
-        const current = { name: newUser.name, email: newUser.email };
-        localStorage.setItem("autoscribe-current-user", JSON.stringify(current));
-        onLogin(current);
-      } catch {
-        setMessage("Could not save the account in this browser.");
+      } else {
+        setMessage(error.message || "Something went wrong. Please try again.");
       }
-      return;
+    } finally {
+      setLoading(false);
     }
+  }
 
-    if (!existing) {
-      setMessage("No account exists with this email. Please create an account.");
-      return;
-    }
+  function switchMode() {
+    setMode(mode === "create" ? "signin" : "create");
+    setMessage("");
+    setPassword("");
+    setConfirmPassword("");
+  }
 
-    if (existing.password !== password) {
-      setMessage("Incorrect password. Please try again.");
-      return;
-    }
+  function continueAsGuest() {
+    const guest = { name: "Student", email: "" };
 
-    const current = { name: existing.name, email: existing.email };
-    localStorage.setItem("autoscribe-current-user", JSON.stringify(current));
-    onLogin(current);
+    localStorage.setItem(
+      "autoscribe-current-user",
+      JSON.stringify(guest)
+    );
+
+    localStorage.removeItem("autoscribe-token");
+    onLogin(guest);
   }
 
   return (
@@ -301,12 +353,24 @@ function Login({ onLogin }) {
       <div className="login-left">
         <div className="brand">
           <div className="brand-mark">✦</div>
-          <div><h1>AutoScribe</h1><p>Project Assistant</p></div>
+          <div>
+            <h1>AutoScribe</h1>
+            <p>Project Assistant</p>
+          </div>
         </div>
+
         <div className="login-message">
           <span className="eyebrow">B.TECH PROJECT WORKSPACE</span>
-          <h2>Turn your project<br />idea into a <span>complete report.</span></h2>
-          <p>Plan, research, document and prepare your B.Tech project from one intelligent workspace.</p>
+          <h2>
+            Turn your project
+            <br />
+            idea into a <span>complete report.</span>
+          </h2>
+          <p>
+            Plan, research, document and prepare your B.Tech project
+            from one intelligent workspace.
+          </p>
+
           <div className="login-points">
             <div>✓ Project planning</div>
             <div>✓ Literature survey</div>
@@ -319,49 +383,116 @@ function Login({ onLogin }) {
       <div className="login-right">
         <div className="login-card">
           <div className="login-card-icon">✦</div>
-          <h2>{mode === "create" ? "Create your account" : "Welcome back"}</h2>
-          <p>{mode === "create" ? "Create an account to organize your project." : "Sign in to continue to AutoScribe."}</p>
 
-          {mode === "create" && <>
-            <label>Full name</label>
-            <input value={name} onChange={e => setName(e.target.value)} placeholder="Your name" autoComplete="name" />
-          </>}
+          <h2>
+            {mode === "create" ? "Create your account" : "Welcome back"}
+          </h2>
+
+          <p>
+            {mode === "create"
+              ? "Create an account to organize your project."
+              : "Sign in to continue to AutoScribe."}
+          </p>
+
+          {mode === "create" && (
+            <>
+              <label>Full name</label>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Your name"
+                autoComplete="name"
+                maxLength={80}
+                disabled={loading}
+              />
+            </>
+          )}
 
           <label>Email address</label>
-          <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="student@example.com" autoComplete="email" />
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="student@example.com"
+            autoComplete="email"
+            disabled={loading}
+          />
 
           <label>Password</label>
-          <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter your password" autoComplete={mode === "create" ? "new-password" : "current-password"} />
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Enter your password"
+            autoComplete={
+              mode === "create" ? "new-password" : "current-password"
+            }
+            disabled={loading}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !loading) submit();
+            }}
+          />
 
-          {mode === "create" && <>
-            <label>Confirm password</label>
-            <input type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} placeholder="Re-enter your password" autoComplete="new-password" />
-          </>}
+          {mode === "create" && (
+            <>
+              <label>Confirm password</label>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Re-enter your password"
+                autoComplete="new-password"
+                disabled={loading}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !loading) submit();
+                }}
+              />
+            </>
+          )}
 
-          <button className="primary-button" onClick={submit}>
-            {mode === "create" ? "Create account →" : "Sign in →"}
+          <button
+            className="primary-button"
+            onClick={submit}
+            disabled={loading}
+          >
+            {loading
+              ? "Please wait..."
+              : mode === "create"
+                ? "Create account →"
+                : "Sign in →"}
           </button>
 
-          <div className="login-divider"><span>or</span></div>
+          <div className="login-divider">
+            <span>or</span>
+          </div>
 
-          <button className="secondary-button" onClick={() => {
-            setMode(mode === "create" ? "signin" : "create");
-            setMessage("");
-            setPassword("");
-            setConfirmPassword("");
-          }}>
+          <button
+            className="secondary-button"
+            onClick={switchMode}
+            disabled={loading}
+          >
             {mode === "create" ? "Back to sign in" : "Create New Account"}
           </button>
 
-          <button className="secondary-button" style={{ marginTop: 8 }} onClick={() => {
-            setMode("guest");
-            const guest = { name: "Student", email: "" };
-            localStorage.setItem("autoscribe-current-user", JSON.stringify(guest));
-            onLogin(guest);
-          }}>Continue as Guest</button>
+          <button
+            className="secondary-button"
+            style={{ marginTop: 8 }}
+            onClick={continueAsGuest}
+            disabled={loading}
+          >
+            Continue as Guest
+          </button>
 
-          {message && <p role="alert" className="auth-error">{message}</p>}
-          <small className="login-note">Demo authentication is stored only in this browser. Do not use a real or reused password.</small>
+          {message && (
+            <p role="alert" className="auth-error">
+              {message}
+            </p>
+          )}
+
+          <small className="login-note">
+            Your account is stored in the AutoScribe database.
+            Passwords are securely hashed by the server.
+          </small>
         </div>
       </div>
     </div>
@@ -565,7 +696,7 @@ const editorRef = useRef(null);
     "References",
   ];
 
-  React.useEffect(() => {
+useEffect(() => {
     const savedContent = docs?.[chapter] || "";
     setContent(savedContent);
 
